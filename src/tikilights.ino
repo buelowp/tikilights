@@ -6,7 +6,7 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			92
+#define APP_VERSION			94
 #define API_KEY             "65e4c00704a8f00c6a1484b4f9eba63c"
 
 PRODUCT_ID(985);
@@ -95,8 +95,8 @@ void goToSleep()
     String time = String("Going to sleep for ") + String(rst) + String(" seconds, sunset at ") + String(g_sunset);
     Serial.println(time);
     Particle.publish("SleepTime", time, PRIVATE);
-    delay(1000);
     Particle.process();
+    delay(2000);
     System.sleep(SLEEP_MODE_DEEP, remainingSleepTime());
 }
 
@@ -117,6 +117,7 @@ void setProgram()
 {
     String path = String("/data/2.5/weather?units=imperial&zip=60005&appid=");
 
+    g_temp = 199;    // default if we fail
     path.concat(API_KEY);
     request.hostname = "api.openweathermap.org";
     request.port = 80;
@@ -132,14 +133,16 @@ void setProgram()
             g_jsonError = static_cast<int>(error.code());
         }
         g_temp = doc["main"]["temp"];
-        Serial.print("Got temperature ");
-        Serial.println(g_temp);
+        String temp = String("Received temperature ") + String(g_temp) + String(" from api.openweathermap.org");
+        Serial.println(temp);
+        Particle.publish("Temperature", temp, PRIVATE);
+        Particle.process();
     }
     else {
-        Serial.println("connection failed");
-        Serial.println(path);
-        Serial.print("Response code ");
-        Serial.println(response.status);
+        String failed = String("Connection to ") + String(request.hostname) + String(" failed: reason code ") + String(response.status);
+        Serial.println(failed);
+        Particle.publish("Connection", failed, PRIVATE);
+        Particle.process();
         g_httpResponse = response.status;
     }
 
