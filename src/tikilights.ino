@@ -1,5 +1,7 @@
 #include <FastLED.h>
 #include <SunSet.h>
+#define ARDUINOJSON_ENABLE_PROGMEM 0
+#include <ArduinoJson.h>
 #include "TikiCandle.h"
 #include "Torch.h"
 
@@ -28,7 +30,9 @@ double g_minsPastMidnight;
 double g_hour;
 time_t g_lastSync;
 bool g_validRunTime;
+int g_jsonError;
 TikiCandle candle;
+TCPClient g_client;
 
 STARTUP(WiFi.selectAntenna(ANT_INTERNAL));
 
@@ -111,47 +115,57 @@ bool validRunTime()
 
 void setProgram()
 {
-    String val("2");
-		Serial.printf("Got temp value %d\n", val.toInt());
-		switch (val.toInt()) {
-		case 0:
-			candle.init(HUE_PURPLE, HUE_PURPLE - 10, HUE_PURPLE + 10, 25, 10);
-			break;
-		case 1:
-			candle.init(HUE_BLUE, HUE_BLUE - 10, HUE_BLUE + 10, 25, 10);
-			break;
-		case 2:
-			candle.init(HUE_GREEN, HUE_GREEN - 10, HUE_GREEN + 10, 25, 10);
-			break;
-		case 3:
-			candle.init(HUE_YELLOW, HUE_YELLOW - 10, HUE_YELLOW + 10, 25, 10);
-			break;
-		case 4:
-			candle.init(HUE_RED, 0, HUE_RED + 20, 25, 10);
-			break;
-		}
-}
+    char server[] = "api.openweathermap.org";
+    char data[1024];
+    int port = 80;
+    int value = 75;
+    const size_t capacity = JSON_ARRAY_SIZE(1) + 
+                            JSON_OBJECT_SIZE(1) + 
+                            2*JSON_OBJECT_SIZE(2) + 
+                            JSON_OBJECT_SIZE(4) + 
+                            JSON_OBJECT_SIZE(5) + 
+                            JSON_OBJECT_SIZE(6) + 
+                            JSON_OBJECT_SIZE(13) + 366;
 
-int newProgram(String val)
-{
-		switch (val.toInt()) {
-		case 0:
-			candle.init(HUE_PURPLE, HUE_PURPLE - 10, HUE_PURPLE + 10, 25, 10);
-			break;
-		case 1:
-			candle.init(HUE_BLUE, HUE_BLUE - 10, HUE_BLUE + 10, 25, 10);
-			break;
-		case 2:
-			candle.init(HUE_GREEN, HUE_GREEN - 10, HUE_GREEN + 10, 25, 10);
-			break;
-		case 3:
-			candle.init(HUE_YELLOW, HUE_YELLOW - 10, HUE_YELLOW + 10, 25, 10);
-			break;
-		case 4:
-			candle.init(HUE_RED, 0, HUE_RED + 20, 25, 10);
-			break;
-		}
-    return val.toInt();
+    if (g_client.connect(server, port)) {
+        Serial.println("connected");
+        g_client.println("GET /data/2.5/weather?id=65e4c00704a8f00c6a1484b4f9eba63c&units=imperial&zip=60005 HTTP/1.1");
+        g_client.println("Host: api.openweathermap.org");
+        g_client.println("Content-Length: 0");
+        g_client.println();
+
+        DynamicJsonDocument doc(capacity);
+        DeserializationError error = deserializeJson(doc, g_client);
+        if (error) {
+            Serial.print(F("deserializeJson() failed: "));
+            Serial.println(error.c_str());
+            g_jsonError = static_cast<int>(error.code());
+            return;
+        }
+        g_client.stop();
+        value = doc["main"]["temp"].as<int>();
+    }
+    else {
+        Serial.println("connection failed");
+    }
+
+	switch (value) {
+	case 0:
+		candle.init(HUE_PURPLE, HUE_PURPLE - 10, HUE_PURPLE + 10, 25, 10);
+		break;
+	case 1:
+		candle.init(HUE_BLUE, HUE_BLUE - 10, HUE_BLUE + 10, 25, 10);
+		break;
+	case 2:
+		candle.init(HUE_GREEN, HUE_GREEN - 10, HUE_GREEN + 10, 25, 10);
+		break;
+	case 3:
+		candle.init(HUE_YELLOW, HUE_YELLOW - 10, HUE_YELLOW + 10, 25, 10);
+		break;
+	case 4:
+		candle.init(HUE_RED, 0, HUE_RED + 20, 25, 10);
+		break;
+	}
 }
 
 void setup()
@@ -164,6 +178,7 @@ void setup()
     g_convertSunset = 0;
     g_hour = 0;
     g_lastSync = 0;
+    g_jsonError = false;
 
     Particle.variable("appid", g_appId);
     Particle.variable("sunset", g_sunset);
@@ -171,10 +186,7 @@ void setup()
     Particle.variable("testsun", g_testSunset);
     Particle.variable("castsun", g_convertSunset);
     Particle.variable("mpm", g_minsPastMidnight);
-    Particle.variable("hour", g_hour);
-    Particle.function("setprogram", newProgram);
-    Particle.variable("lastsync", g_lastSync);
-    Particle.variable("valid", g_validRunTime);
+    Particle.variable("jsonerr", g_jsonError);
 
 	Serial.begin(115200);
 	delay(3000); // sanity delay
