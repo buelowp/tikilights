@@ -6,8 +6,8 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			94
-#define API_KEY             "65e4c00704a8f00c6a1484b4f9eba63c"
+#define APP_VERSION			96
+#define API_KEY             <error>
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
@@ -20,6 +20,7 @@ int tikiCurrentProgram;
 int g_appId;
 int g_timeZone;
 double g_sunset;
+double g_awakeTime;
 double g_minsPastMidnight;
 bool g_validRunTime;
 int g_jsonError;
@@ -71,11 +72,12 @@ void syncTime()
 int remainingSleepTime()
 {
     int remain = 60 * 60;
+    int interval = 0;
     g_minsPastMidnight = Time.hour() * 60 + Time.minute();
-    int interval = (g_sunset - g_minsPastMidnight) * 60;
+    interval = (g_awakeTime - g_minsPastMidnight) * 60;
  
     /* Shouldn't get here */
-    if (g_sunset < (g_minsPastMidnight - 60))
+    if (g_awakeTime < (g_minsPastMidnight - 60))
         return remain;
 
     if (interval > remain)
@@ -92,7 +94,7 @@ void goToSleep()
     FastLED.clear();
     FastLED.show();
 
-    String time = String("Going to sleep for ") + String(rst) + String(" seconds, sunset at ") + String(g_sunset);
+    String time = String("Going to sleep for ") + String(rst) + String(" seconds, turning lights on at ") + String(g_awakeTime);
     Serial.println(time);
     Particle.publish("SleepTime", time, PRIVATE);
     Particle.process();
@@ -103,10 +105,11 @@ void goToSleep()
 bool validRunTime()
 {
     g_sunset = sun.calcSunset();
+    g_awakeTime = g_sunset - 60;
     g_minsPastMidnight = Time.hour() * 60 + Time.minute();
     g_validRunTime = true;
 
-    if (g_minsPastMidnight >= g_sunset - 60)
+    if (g_minsPastMidnight >= g_awakeTime)
         return g_validRunTime;
     
     g_validRunTime = false;
@@ -167,6 +170,7 @@ void setup()
 
     Particle.variable("appid", g_appId);
     Particle.variable("sunset", g_sunset);
+    Particle.variable("wakeup", g_awakeTime);
     Particle.variable("temp", g_temp);
     Particle.variable("mpm", g_minsPastMidnight);
     Particle.variable("jsonerr", g_jsonError);
@@ -179,6 +183,9 @@ void setup()
 	waitUntil(WiFi.ready);
 	syncTime();
 	setProgram();
+
+    String ident = String("App Version: ") + String(g_appId);
+    Particle.publish("Identity", ident, PRIVATE);
 }
 
 void loop()
