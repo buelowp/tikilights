@@ -6,7 +6,7 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			96
+#define APP_VERSION			97
 #define API_KEY             <error>
 
 PRODUCT_ID(985);
@@ -26,17 +26,32 @@ bool g_validRunTime;
 int g_jsonError;
 int g_temp;
 int g_httpResponse;
+e_runAnyway g_runAnyway;
 TikiCandle candle;
 
 HttpClient http;
 http_header_t headers[] = {
     { "Accept" , "*/*"},
-    { NULL, NULL } // NOTE: Always terminate headers will NULL
+    { NULL, NULL } // NOTE: Always terminate headers with NULL
 };
 http_request_t request;
 http_response_t response;
 
 STARTUP(WiFi.selectAntenna(ANT_INTERNAL));
+
+void turnOffWifi()
+{
+    #ifdef ON_BATTERY
+        WiFi.off();
+    #endif
+}
+
+void turnOnWifi()
+{
+    #ifdef ON_BATTERY
+        WiFi.on();
+    #endif
+}
 
 int currentTimeZone()
 {
@@ -90,24 +105,32 @@ int remainingSleepTime()
 
 void goToSleep()
 {
-    int rst = remainingSleepTime();
     FastLED.clear();
     FastLED.show();
-
+#ifdef ON_BATTERY
+    int rst = remainingSleepTime();
     String time = String("Going to sleep for ") + String(rst) + String(" seconds, turning lights on at ") + String(g_awakeTime);
     Serial.println(time);
     Particle.publish("SleepTime", time, PRIVATE);
     Particle.process();
     delay(2000);
     System.sleep(SLEEP_MODE_DEEP, remainingSleepTime());
+#endif
 }
 
 bool validRunTime()
 {
     g_sunset = sun.calcSunset();
-    g_awakeTime = g_sunset - 60;
     g_minsPastMidnight = Time.hour() * 60 + Time.minute();
     g_validRunTime = true;
+
+    if (g_runAnyway == OOB_ON)
+        return true;
+    if (g_runAnyway == OOB_OFF)
+        return false;
+
+    if (g_minsPastMidnight == 0)
+        g_runAnyway = NORMAL_OPERATION;
 
     if (g_minsPastMidnight >= g_awakeTime)
         return g_validRunTime;
@@ -149,16 +172,68 @@ void setProgram()
         g_httpResponse = response.status;
     }
 
-    if (g_temp >= 70)
-        candle.init(HUE_RED, 0, HUE_RED + 20, 25, 10);
+/* Possible colors to use
+    HUE_RED
+    HUE_ORANGE
+    HUE_YELLOW
+    HUE_GREEN
+    HUE_AQUA
+    HUE_BLUE
+    HUE_PURPLE
+    HUE_PINK
+ */
+    if (g_temp >= 75)
+        candle.init(HUE_RED, 0, HUE_RED + 10, 25, 10);
+    else if (g_temp >= 70)
+        candle.init(HUE_ORANGE, HUE_ORANGE - 10, HUE_ORANGE + 10, 25, 10);
     else if (g_temp >= 65)
         candle.init(HUE_YELLOW, HUE_YELLOW - 10, HUE_YELLOW + 10, 25, 10);
     else if (g_temp >= 60)
         candle.init(HUE_GREEN, HUE_GREEN - 10, HUE_GREEN + 10, 25, 10);
     else if (g_temp >= 55)
+        candle.init(HUE_AQUA, HUE_AQUA - 10, HUE_GREEN + 10, 25, 10);
+    else if (g_temp >= 50)
         candle.init(HUE_BLUE, HUE_BLUE - 10, HUE_BLUE + 10, 25, 10);
     else
         candle.init(HUE_PURPLE, HUE_PURPLE - 10, HUE_PURPLE + 10, 25, 10);
+}
+
+int setWakeOffset(String p)
+{
+    g_awakeTime = g_sunset - p.toInt();
+    return (int)g_awakeTime;
+}
+
+int wakeup(String p)
+{
+    g_runAnyway = OOB_ON;
+
+    if (p == "red")
+        candle.init(HUE_RED, 0, HUE_RED + 10, 25, 10);
+    else if (p == "yellow")
+        candle.init(HUE_YELLOW, HUE_YELLOW - 10, HUE_YELLOW + 10, 25, 10);
+    else if (p == "orange")
+        candle.init(HUE_ORANGE, HUE_ORANGE - 10, HUE_ORANGE + 10, 25, 10);
+    else if (p == "green")
+        candle.init(HUE_GREEN, HUE_GREEN - 10, HUE_GREEN + 10, 25, 10);
+    else if (p == "aqua")
+        candle.init(HUE_AQUA, HUE_AQUA - 10, HUE_GREEN + 10, 25, 10);
+    else if (p == "blue")
+        candle.init(HUE_BLUE, HUE_BLUE - 10, HUE_BLUE + 10, 25, 10);
+    else if (p == "purple")
+        candle.init(HUE_PURPLE, HUE_PURPLE - 10, HUE_PURPLE + 10, 25, 10);
+    else if (p == "pink")
+        candle.init(HUE_PINK, HUE_PINK - 10, HUE_PINK + 10, 25, 10);
+    else
+        candle.init(HUE_RED, 0, HUE_RED + 10, 25, 10);
+
+    return 0;
+}
+
+int shutdown(String)
+{
+    g_runAnyway = OOB_OFF;
+    return 2;
 }
 
 void setup()
@@ -167,6 +242,9 @@ void setup()
     g_timeZone = CST_OFFSET;
     g_jsonError = false;
     g_temp = 0;
+    g_runAnyway = NORMAL_OPERATION;
+
+    g_awakeTime = g_sunset - 60;
 
     Particle.variable("appid", g_appId);
     Particle.variable("sunset", g_sunset);
@@ -174,6 +252,9 @@ void setup()
     Particle.variable("temp", g_temp);
     Particle.variable("mpm", g_minsPastMidnight);
     Particle.variable("jsonerr", g_jsonError);
+    Particle.function("wakeoffset", setWakeOffset);
+    Particle.function("wakeup", wakeup);
+    Particle.function("shutdown", shutdown);
 
 	Serial.begin(115200);
 	delay(3000); // sanity delay
@@ -190,24 +271,17 @@ void setup()
 
 void loop()
 {
-    static bool programSetDone = false;
-    if (!validRunTime()) {
-        goToSleep();
-    }
-
-	if ((Time.minute() == 1) && !programSetDone) {
-		Serial.printf("Turning wifi on\n");
-		WiFi.on();
+    EVERY_N_MILLIS(ONE_HOUR) {
+		turnOnWifi();
         waitUntil(WiFi.ready);
         syncTime();
         setProgram();
-		programSetDone = true;
-	}
+        turnOffWifi();
+    }
 
-	if (Time.minute() != 1) {
-		WiFi.off();
-		programSetDone = false;
-	}
-
-    candle.run();
+    if (!validRunTime()) {
+        goToSleep();
+    }
+    else
+        candle.run();
 }

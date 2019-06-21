@@ -23,5 +23,11 @@
 
 #define ONE_HOUR            (1000 * 60 * 60)
 
+typedef enum RUN_ANYWAY {
+    NORMAL_OPERATION = 0,
+    OOB_ON,
+    OOB_OFF,
+} e_runAnyway;
+
 
 #endif /* USER_APPLICATIONS_TIKITORCH_TORCH_H_ */
