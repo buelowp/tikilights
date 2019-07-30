@@ -18,7 +18,7 @@
 #define DST_OFFSET          (CST_OFFSET + 1)
 #define TIME_BASE_YEAR		2019
 
-#define BRIGHTNESS  200
+#define BRIGHTNESS          250
 #define WIFI_TIMEOUT        120000
 
 #define ONE_HOUR            (1000 * 60 * 60)

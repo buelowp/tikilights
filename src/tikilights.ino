@@ -6,8 +6,8 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			97
-#define API_KEY             <error>
+#define APP_VERSION			107
+#define API_KEY             "1f87fe9d8a437f713c617f962df4f0a9"
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
@@ -26,6 +26,7 @@ bool g_validRunTime;
 int g_jsonError;
 int g_temp;
 int g_httpResponse;
+int g_wakeOffset;
 e_runAnyway g_runAnyway;
 TikiCandle candle;
 
@@ -122,21 +123,24 @@ bool validRunTime()
 {
     g_sunset = sun.calcSunset();
     g_minsPastMidnight = Time.hour() * 60 + Time.minute();
-    g_validRunTime = true;
+    g_awakeTime = g_sunset - g_wakeOffset;
 
-    if (g_runAnyway == OOB_ON)
+    if (g_runAnyway == OOB_ON) {
         return true;
-    if (g_runAnyway == OOB_OFF)
+    }
+
+    if (g_runAnyway == OOB_OFF) {
         return false;
+    }
 
     if (g_minsPastMidnight == 0)
         g_runAnyway = NORMAL_OPERATION;
 
-    if (g_minsPastMidnight >= g_awakeTime)
-        return g_validRunTime;
+    if (g_minsPastMidnight >= g_awakeTime) {
+        return true;
+    }
     
-    g_validRunTime = false;
-    return g_validRunTime;
+    return false;
 }
 
 void setProgram()
@@ -200,17 +204,15 @@ void setProgram()
 
 int setWakeOffset(String p)
 {
-    g_awakeTime = g_sunset - p.toInt();
-    return (int)g_awakeTime;
+    g_wakeOffset = p.toInt();
+    return g_wakeOffset;
 }
 
 int wakeup(String p)
 {
     g_runAnyway = OOB_ON;
 
-    if (p == "red")
-        candle.init(HUE_RED, 0, HUE_RED + 10, 25, 10);
-    else if (p == "yellow")
+    if (p == "yellow")
         candle.init(HUE_YELLOW, HUE_YELLOW - 10, HUE_YELLOW + 10, 25, 10);
     else if (p == "orange")
         candle.init(HUE_ORANGE, HUE_ORANGE - 10, HUE_ORANGE + 10, 25, 10);
@@ -236,6 +238,16 @@ int shutdown(String)
     return 2;
 }
 
+int runOperation(String p)
+{
+    if (p == "reset") {
+        g_runAnyway = NORMAL_OPERATION;
+        return 0;
+    }
+
+    return -1;
+}
+
 void setup()
 {
     g_appId = APP_VERSION;
@@ -243,8 +255,13 @@ void setup()
     g_jsonError = false;
     g_temp = 0;
     g_runAnyway = NORMAL_OPERATION;
+    g_validRunTime = false;
+    g_wakeOffset = 60;
+    g_awakeTime = 0;
 
-    g_awakeTime = g_sunset - 60;
+	Serial.begin(115200);
+	delay(3000); // sanity delay
+	FastLED.addLeds<NEOPIXEL, LED_PIN>(leds, NUM_LEDS);
 
     Particle.variable("appid", g_appId);
     Particle.variable("sunset", g_sunset);
@@ -252,19 +269,17 @@ void setup()
     Particle.variable("temp", g_temp);
     Particle.variable("mpm", g_minsPastMidnight);
     Particle.variable("jsonerr", g_jsonError);
+    Particle.variable("awake", g_validRunTime);
     Particle.function("wakeoffset", setWakeOffset);
     Particle.function("wakeup", wakeup);
     Particle.function("shutdown", shutdown);
-
-	Serial.begin(115200);
-	delay(3000); // sanity delay
-	FastLED.addLeds<NEOPIXEL, LED_PIN>(leds, NUM_LEDS);
+    Particle.function("operation", runOperation);
 
 	sun.setPosition(LATITUDE, LONGITUDE, CST_OFFSET);
 	waitUntil(WiFi.ready);
 	syncTime();
 	setProgram();
-
+    
     String ident = String("App Version: ") + String(g_appId);
     Particle.publish("Identity", ident, PRIVATE);
 }
@@ -279,9 +294,8 @@ void loop()
         turnOffWifi();
     }
 
-    if (!validRunTime()) {
-        goToSleep();
-    }
-    else
+    if ((g_validRunTime = validRunTime()) == true)
         candle.run();
+    else
+        goToSleep();
 }
