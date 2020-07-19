@@ -21,7 +21,10 @@
 #define BRIGHTNESS          250
 #define WIFI_TIMEOUT        120000
 
-#define ONE_HOUR            (1000 * 60 * 60)
+#define ONE_SECOND          1000
+#define FIVE_SECONDS        (5 * ONE_SECOND)
+#define ONE_MINUTE          (60 * ONE_SECOND)
+#define ONE_HOUR            (60 * ONE_MINUTE)
 
 typedef enum RUN_ANYWAY {
     NORMAL_OPERATION = 0,
