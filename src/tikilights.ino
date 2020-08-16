@@ -1,5 +1,6 @@
 #define FASTLED_INTERNAL
-
+#define CLK_DBL             0
+#define CLEANUP_R1_AVRASM   0
 #include <FastLED.h>
 #include <sunset.h>
 #define ARDUINOJSON_ENABLE_PROGMEM 0
@@ -8,7 +9,7 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			120
+#define APP_VERSION			122
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
@@ -165,6 +166,8 @@ void setup()
         client.subscribe("device/operation/wakeup");
     }
     g_sunset = sun.calcSunset();
+    FastLED.clear();
+    FastLED.show();
     Log.info("Done with setup, app version %d", g_appId);
 }
 
@@ -192,7 +195,7 @@ void loop()
         }
     }
     if (!g_disabled) {
-        if (g_sunset >= mpm)
+        if (mpm >= g_sunset)
             candle.run();
     }
     else {
