@@ -8,7 +8,6 @@
 #ifndef USER_APPLICATIONS_TIKITORCH_TORCH_H_
 #define USER_APPLICATIONS_TIKITORCH_TORCH_H_
 
-
 #define LED_PIN     	D5
 #define NUM_LEDS    	12
 
@@ -31,6 +30,5 @@ typedef enum RUN_ANYWAY {
     OOB_ON,
     OOB_OFF,
 } e_runAnyway;
-
 
 #endif /* USER_APPLICATIONS_TIKITORCH_TORCH_H_ */

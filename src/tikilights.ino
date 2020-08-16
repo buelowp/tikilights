@@ -1,15 +1,19 @@
+#define FASTLED_INTERNAL
+
 #include <FastLED.h>
-#include <SunSet.h>
+#include <sunset.h>
 #define ARDUINOJSON_ENABLE_PROGMEM 0
 #include <ArduinoJson.h>
 #include <MQTT.h>
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			111
+#define APP_VERSION			120
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
+
+SerialLogHandler logHandler;
 
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 
@@ -79,8 +83,12 @@ int shutdownDevice(String)
 
 void setProgram()
 {
-    NSFastLED::HSVHue color = static_cast<NSFastLED::HSVHue>(map(g_temp, 0, 100, 0, 224));
+    NSFastLED::HSVHue color;
+    int c = 255 - map(g_temp, 0, 100, 0, 255);
 
+    color = static_cast<NSFastLED::HSVHue>(c);
+
+    Log.info("New program value is %d", color);
     candle.init(color, color - 10, color + 10, 25, 10);
 }
 
@@ -93,11 +101,8 @@ int setWakeOffset(String p)
 int wakeup(String p)
 {
     g_disabled = false;
-    NSFastLED::HSVHue color = static_cast<NSFastLED::HSVHue>(map(g_temp, 0, 100, 0, 224));
-
-    candle.init(color, color - 10, color + 10, 25, 10);
-
-    return 0;
+    setProgram();
+    return g_temp;
 }
 
 void restartDevice()
@@ -110,14 +115,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     StaticJsonDocument<200> json;
     auto err = deserializeJson(json, static_cast<unsigned char*>(payload), static_cast<size_t>(length));
 
-    if (err != DeserializationError::Ok)
+    if (err != DeserializationError::Ok) {
+        Log.error("Unable to deserialize JSON");
+        Log.info("%s", payload);
         return;
+    }
 
     if (strcmp(topic, "weather/conditions") == 0) {
         g_temp = json["environment"]["farenheit"];
         setProgram();
-        Serial.print("New temperature is ");
-        Serial.println(g_temp);
+        Log.info("New temperature is %d", g_temp);
     }
     if (strcmp(topic, "tiki/device/restart") == 0) {
         restartDevice();
@@ -142,6 +149,7 @@ void setup()
     Particle.variable("appid", g_appId);
     Particle.variable("sunset", g_sunset);
     Particle.variable("disabled", g_disabled);
+    Particle.variable("temp", g_temp);
     Particle.function("wakeoffset", setWakeOffset);
     Particle.function("shutdown", shutdownDevice);
 
@@ -151,13 +159,13 @@ void setup()
     
     client.connect(g_mqttName.c_str());
     if (client.isConnected()) {
-        Serial.println("Connected");
-        client.subscribe("weather/event");
+        Log.info("MQTT Connected");
+        client.subscribe("weather/conditions");
         client.subscribe("device/operation/restart");
         client.subscribe("device/operation/wakeup");
     }
-    Serial.println("Done with setup");
     g_sunset = sun.calcSunset();
+    Log.info("Done with setup, app version %d", g_appId);
 }
 
 void loop()
@@ -174,7 +182,7 @@ void loop()
             client.loop();
         }   
         else {
-            Serial.println("We're not looping");
+            Log.error("We're not looping");
             client.connect(g_mqttName.c_str());
             if (client.isConnected()) {
                 client.subscribe("weather/event");
