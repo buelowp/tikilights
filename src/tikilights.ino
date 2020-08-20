@@ -9,7 +9,7 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			122
+#define APP_VERSION			123
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
@@ -33,6 +33,7 @@ int g_jsonError;
 int g_temp;
 int g_httpResponse;
 int g_wakeOffset;
+bool g_running;
 String g_name = "tikilight-";
 String g_mqttName = g_name + System.deviceID().substring(0, 8);
 TikiCandle candle;
@@ -174,10 +175,17 @@ void setup()
 void loop()
 {
     int mpm = Time.minute() + (Time.hour() * 60);
-
+    
     EVERY_N_MILLIS(ONE_HOUR) {
         syncTime();
         g_sunset = sun.calcSunset();
+    }
+
+    if (mpm >= g_sunset) {
+        g_running = true;
+    }
+    else {
+        g_running = false;
     }
 
     EVERY_N_MILLIS(FIVE_SECONDS) {
@@ -194,9 +202,8 @@ void loop()
             }
         }
     }
-    if (!g_disabled) {
-        if (mpm >= g_sunset)
-            candle.run();
+    if (!g_disabled && g_running) {
+        candle.run(25);        
     }
     else {
         FastLED.clear();

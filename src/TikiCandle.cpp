@@ -139,10 +139,9 @@ void TikiCandle::oscillate()
 	}
 //	Serial.println("About to see the rainbow");
 	seeTheRainbow();
-	delay(20);
 }
 
-void TikiCandle::run()
+void TikiCandle::run(int slow)
 {
 	switchDirection();
 	if (m_toUpdateHue++ == 5) {
@@ -153,4 +152,5 @@ void TikiCandle::run()
 		mHueUpdate = 0;
 	}
 	oscillate();
+    delay(slow);
 }

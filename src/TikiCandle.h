@@ -18,7 +18,7 @@ public:
 	virtual ~TikiCandle();
 
 	bool init(HSVHue, int, int, int, int);
-	void run();
+	void run(int);
 	void switchDirection();
 	void setHueDirection();
 	void flicker();
