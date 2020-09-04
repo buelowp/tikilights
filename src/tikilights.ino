@@ -9,7 +9,7 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			123
+#define APP_VERSION			126
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
@@ -159,46 +159,65 @@ void setup()
 	waitUntil(WiFi.ready);
 	syncTime();
     
-    client.connect(g_mqttName.c_str());
-    if (client.isConnected()) {
-        Log.info("MQTT Connected");
-        client.subscribe("weather/conditions");
-        client.subscribe("device/operation/restart");
-        client.subscribe("device/operation/wakeup");
-    }
     g_sunset = sun.calcSunset();
     FastLED.clear();
     FastLED.show();
     Log.info("Done with setup, app version %d", g_appId);
+    WiFi.off();
 }
 
 void loop()
 {
     int mpm = Time.minute() + (Time.hour() * 60);
-    
-    EVERY_N_MILLIS(ONE_HOUR) {
-        syncTime();
-        g_sunset = sun.calcSunset();
-    }
 
     if (mpm >= g_sunset) {
+        if (!WiFi.ready()) {
+            WiFi.on();
+            WiFi.connect();
+            waitUntil(WiFi.ready);
+            Particle.connect();
+            Particle.publishVitals();
+        }
         g_running = true;
+        if (!client.isConnected()) {
+            client.connect(g_mqttName.c_str());
+            if (client.isConnected()) {
+                Log.info("MQTT Connected");
+                client.subscribe("weather/conditions");
+            }
+        }
     }
     else {
         g_running = false;
+        WiFi.off();
+    }
+    
+    EVERY_N_MILLIS(ONE_HOUR) {
+        if (!g_running) {
+            WiFi.on();
+            WiFi.connect();
+            waitUntil(WiFi.ready);
+            Particle.connect();
+            Particle.publishVitals();
+        }
+        syncTime();
+        g_sunset = sun.calcSunset();
+        if (!g_running) {
+            WiFi.off();
+        }
     }
 
     EVERY_N_MILLIS(FIVE_SECONDS) {
-        if (client.isConnected()) {
-            client.loop();
-        }   
-        else {
-            Log.error("We're not looping");
-            client.connect(g_mqttName.c_str());
-            if (client.isConnected()) {
-                client.subscribe("weather/event");
-                client.subscribe("device/operation/restart");
-                client.subscribe("device/operation/wakeup");
+        if (g_running) {
+            if (WiFi.ready() && client.isConnected()) {
+                client.loop();
+            }   
+            else {
+                Log.error("We're not looping");
+                client.connect(g_mqttName.c_str());
+                if (client.isConnected()) {
+                    client.subscribe("weather/event");
+                }
             }
         }
     }
