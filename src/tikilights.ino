@@ -9,7 +9,7 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			126
+#define APP_VERSION			136
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
@@ -39,6 +39,7 @@ String g_mqttName = g_name + System.deviceID().substring(0, 8);
 TikiCandle candle;
 byte mqttServer[] = {172, 24, 1, 13};
 MQTT client(mqttServer, 1883, mqttCallback);
+char g_buffer[512];
 
 STARTUP(WiFi.selectAntenna(ANT_INTERNAL));
 
@@ -86,12 +87,18 @@ int shutdownDevice(String)
 void setProgram()
 {
     NSFastLED::HSVHue color;
-    int c = 255 - map(g_temp, 0, 100, 0, 255);
+    int t = g_temp;
+    if (t < 0)
+        t = 0;
+    if (t > 85)
+        t = 85;
+        
+    int c = 255 - map(g_temp, 0, 85, 0, 255);
 
     color = static_cast<NSFastLED::HSVHue>(c);
 
     Log.info("New program value is %d", color);
-    candle.init(color, color - 10, color + 10, 25, 10);
+    candle.init(color, color - 5, color + 5, 25, 10);
 }
 
 int setWakeOffset(String p)
@@ -136,6 +143,37 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     }
 }
 
+void mqttCheckin(int mpm)
+{
+    JSONBufferWriter writer(g_buffer, sizeof(g_buffer) - 1);
+    if (!client.isConnected()) {
+        client.connect(g_mqttName.c_str());
+        if (client.isConnected()) {
+            writer.beginObject();
+            writer.name("appid").value(g_appId);
+            writer.name("time");
+            writer.beginObject();
+                writer.name("mpm").value(mpm);
+                writer.endObject();
+            writer.name("photon");
+            writer.beginObject();
+                writer.name("uptime").value(System.uptime());
+                writer.name("deviceid").value(System.deviceID());
+                writer.name("version").value(System.version());
+            writer.endObject();
+            writer.name("network");
+            writer.beginObject();
+                writer.name("ssid").value(WiFi.SSID());
+                writer.name("signalquality").value(WiFi.RSSI());
+            writer.endObject();
+            
+            writer.endObject();
+            writer.buffer()[std::min(writer.bufferSize(), writer.dataSize())] = 0;
+            client.publish("tikilights/state", writer.buffer());
+        }
+    }
+}
+
 void setup()
 {
     g_appId = APP_VERSION;
@@ -143,6 +181,7 @@ void setup()
     g_temp = 0;
     g_wakeOffset = 30;
     g_disabled = false;
+    g_running = false;
 
 	Serial.begin(115200);
 	delay(2000); // sanity delay
@@ -159,6 +198,8 @@ void setup()
 	waitUntil(WiFi.ready);
 	syncTime();
     
+    int mpm = Time.minute() + (Time.hour() * 60);
+    mqttCheckin(mpm);
     g_sunset = sun.calcSunset();
     FastLED.clear();
     FastLED.show();
@@ -171,56 +212,58 @@ void loop()
     int mpm = Time.minute() + (Time.hour() * 60);
 
     if (mpm >= g_sunset) {
+        Log.info("We are past sunset: %d", mpm);
+        g_running = true;
         if (!WiFi.ready()) {
+            Log.info("Getting wifi started...");
             WiFi.on();
             WiFi.connect();
             waitUntil(WiFi.ready);
             Particle.connect();
             Particle.publishVitals();
+            Particle.syncTime();
+            waitUntil(Particle.syncTimeDone);
+            mqttCheckin(mpm);
         }
-        g_running = true;
-        if (!client.isConnected()) {
-            client.connect(g_mqttName.c_str());
-            if (client.isConnected()) {
-                Log.info("MQTT Connected");
-                client.subscribe("weather/conditions");
+        EVERY_N_MILLIS(ONE_SECOND) {
+            if (!client.isConnected()) {
+                client.connect(g_mqttName.c_str());
+                if (client.isConnected()) {
+                    Log.info("MQTT Connected");
+                    client.subscribe("weather/conditions");
+                }
+            }
+            else {
+                client.loop();
             }
         }
     }
     else {
-        g_running = false;
-        WiFi.off();
+        if (g_running) {
+            g_running = false;
+            Log.info("We are not past sunset: %d (%d)", mpm, g_running);
+            WiFi.off();
+        }
     }
     
     EVERY_N_MILLIS(ONE_HOUR) {
+        Log.info("Attempting to checkin in: %d", g_running);
         if (!g_running) {
             WiFi.on();
             WiFi.connect();
             waitUntil(WiFi.ready);
             Particle.connect();
             Particle.publishVitals();
+            Particle.syncTime();
+            waitUntil(Particle.syncTimeDone);
+            mqttCheckin(mpm);
         }
         syncTime();
-        g_sunset = sun.calcSunset();
         if (!g_running) {
             WiFi.off();
         }
     }
 
-    EVERY_N_MILLIS(FIVE_SECONDS) {
-        if (g_running) {
-            if (WiFi.ready() && client.isConnected()) {
-                client.loop();
-            }   
-            else {
-                Log.error("We're not looping");
-                client.connect(g_mqttName.c_str());
-                if (client.isConnected()) {
-                    client.subscribe("weather/event");
-                }
-            }
-        }
-    }
     if (!g_disabled && g_running) {
         candle.run(25);        
     }
