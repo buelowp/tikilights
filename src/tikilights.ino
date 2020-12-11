@@ -9,7 +9,7 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			136
+#define APP_VERSION			140
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
@@ -63,6 +63,31 @@ int currentTimeZone()
     }
     g_timeZone = CST_OFFSET;
     return CST_OFFSET;
+}
+
+void netConnect(int mpm)
+{
+    WiFi.on();
+    WiFi.connect();
+    waitUntil(WiFi.ready);
+    if (!client.isConnected()) {
+        client.connect(g_mqttName.c_str());
+        if (client.isConnected()) {
+            Log.info("MQTT Connected");
+            client.subscribe("weather/conditions");
+        }
+    }
+
+    Particle.connect();
+    Particle.publishVitals();
+    mqttCheckin(mpm, false);
+    
+}
+
+void netDisconnect()
+{
+    client.disconnect();
+    WiFi.off();
 }
 
 void syncTime()
@@ -143,7 +168,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     }
 }
 
-void mqttCheckin(int mpm)
+void mqttCheckin(int mpm, bool checkin)
 {
     JSONBufferWriter writer(g_buffer, sizeof(g_buffer) - 1);
     if (!client.isConnected()) {
@@ -151,10 +176,14 @@ void mqttCheckin(int mpm)
         if (client.isConnected()) {
             writer.beginObject();
             writer.name("appid").value(g_appId);
+            if (checkin) {
+                writer.name("lights").value("on");
+            }
             writer.name("time");
             writer.beginObject();
                 writer.name("mpm").value(mpm);
-                writer.endObject();
+                writer.name("sunset").value(sun.calcSunset());
+            writer.endObject();
             writer.name("photon");
             writer.beginObject();
                 writer.name("uptime").value(System.uptime());
@@ -195,16 +224,15 @@ void setup()
     Particle.function("shutdown", shutdownDevice);
 
 	sun.setPosition(LATITUDE, LONGITUDE, CST_OFFSET);
-	waitUntil(WiFi.ready);
 	syncTime();
     
     int mpm = Time.minute() + (Time.hour() * 60);
-    mqttCheckin(mpm);
+    mqttCheckin(mpm, false);
     g_sunset = sun.calcSunset();
     FastLED.clear();
     FastLED.show();
     Log.info("Done with setup, app version %d", g_appId);
-    WiFi.off();
+    netDisconnect();
 }
 
 void loop()
@@ -215,15 +243,7 @@ void loop()
         Log.info("We are past sunset: %d", mpm);
         g_running = true;
         if (!WiFi.ready()) {
-            Log.info("Getting wifi started...");
-            WiFi.on();
-            WiFi.connect();
-            waitUntil(WiFi.ready);
-            Particle.connect();
-            Particle.publishVitals();
-            Particle.syncTime();
-            waitUntil(Particle.syncTimeDone);
-            mqttCheckin(mpm);
+            netConnect(mpm);
         }
         EVERY_N_MILLIS(ONE_SECOND) {
             if (!client.isConnected()) {
@@ -242,25 +262,18 @@ void loop()
         if (g_running) {
             g_running = false;
             Log.info("We are not past sunset: %d (%d)", mpm, g_running);
-            WiFi.off();
+            netDisconnect();
         }
     }
     
     EVERY_N_MILLIS(ONE_HOUR) {
         Log.info("Attempting to checkin in: %d", g_running);
         if (!g_running) {
-            WiFi.on();
-            WiFi.connect();
-            waitUntil(WiFi.ready);
-            Particle.connect();
-            Particle.publishVitals();
-            Particle.syncTime();
-            waitUntil(Particle.syncTimeDone);
-            mqttCheckin(mpm);
+            netConnect(mpm);
         }
         syncTime();
         if (!g_running) {
-            WiFi.off();
+            netDisconnect();
         }
     }
 
