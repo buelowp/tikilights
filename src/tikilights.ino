@@ -9,7 +9,7 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			153
+#define APP_VERSION			155
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
@@ -37,6 +37,7 @@ int g_programColor;
 bool g_running;
 String g_name = "tikilight-";
 String g_mqttName = g_name + System.deviceID().substring(0, 8);
+String g_checkin = "tiki/state/" + System.deviceID().substring(0, 8);
 TikiCandle candle;
 byte mqttServer[] = {172, 24, 1, 13};
 MQTT client(mqttServer, 1883, mqttCallback);
@@ -170,34 +171,36 @@ void mqttCheckin(int mpm, bool checkin)
     JSONBufferWriter writer(g_buffer, sizeof(g_buffer) - 1);
     if (!client.isConnected()) {
         client.connect(g_mqttName.c_str());
-        if (client.isConnected()) {
-            writer.beginObject();
-            writer.name("appid").value(g_appId);
-            if (checkin) {
-                writer.name("lights").value("on");
-            }
-            writer.name("time");
-            writer.beginObject();
-                writer.name("mpm").value(mpm);
-                writer.name("sunset").value(sun.calcSunset());
-            writer.endObject();
-            writer.name("photon");
-            writer.beginObject();
-                writer.name("uptime").value(System.uptime());
-                writer.name("deviceid").value(System.deviceID());
-                writer.name("version").value(System.version());
-            writer.endObject();
-            writer.name("network");
-            writer.beginObject();
-                writer.name("ssid").value(WiFi.SSID());
-                writer.name("signalquality").value(WiFi.RSSI());
-            writer.endObject();
-            
-            writer.endObject();
-            writer.buffer()[std::min(writer.bufferSize(), writer.dataSize())] = 0;
-            client.publish("tiki/state", writer.buffer());
+        Log.printf("Client is connected now: %d\n", client.isConnected());
+    }
+    if (client.isConnected()) {
+        writer.beginObject();
+        writer.name("appid").value(g_appId);
+        if (checkin) {
+            writer.name("lights").value("on");
         }
-        delay(100);
+        writer.name("time");
+        writer.beginObject();
+            writer.name("mpm").value(mpm);
+            writer.name("sunset").value(sun.calcSunset());
+        writer.endObject();
+        writer.name("photon");
+        writer.beginObject();
+            writer.name("uptime").value(System.uptime());
+            writer.name("deviceid").value(System.deviceID());
+            writer.name("version").value(System.version());
+        writer.endObject();
+        writer.name("network");
+        writer.beginObject();
+            writer.name("ssid").value(WiFi.SSID());
+            writer.name("signalquality").value(WiFi.RSSI());
+        writer.endObject();
+            
+        writer.endObject();
+        writer.buffer()[std::min(writer.bufferSize(), writer.dataSize())] = 0;
+        Log.printf("Publishing vitals: %s\n", writer.buffer());
+        client.publish(g_checkin, writer.buffer(), MQTT::EMQTT_QOS::QOS1, true);
+        client.loop();
     }
 }
 
@@ -246,10 +249,12 @@ void loop()
         }
         EVERY_N_MILLIS(ONE_SECOND) {
             if (!client.isConnected()) {
-                client.connect(g_mqttName.c_str());
-                if (client.isConnected()) {
+                if (client.connect(g_mqttName.c_str())) {
                     Log.info("MQTT Connected");
                     client.subscribe("weather/conditions");
+                }
+                else {
+                    Log.info("Could not connect to MQTT server");
                 }
             }
             else {
