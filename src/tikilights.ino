@@ -9,7 +9,7 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			140
+#define APP_VERSION			153
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
@@ -33,6 +33,7 @@ int g_jsonError;
 int g_temp;
 int g_httpResponse;
 int g_wakeOffset;
+int g_programColor;
 bool g_running;
 String g_name = "tikilight-";
 String g_mqttName = g_name + System.deviceID().substring(0, 8);
@@ -81,11 +82,12 @@ void netConnect(int mpm)
     Particle.connect();
     Particle.publishVitals();
     mqttCheckin(mpm, false);
-    
 }
 
 void netDisconnect()
 {
+    client.loop();
+    delay(100);
     client.disconnect();
     WiFi.off();
 }
@@ -112,15 +114,10 @@ int shutdownDevice(String)
 void setProgram()
 {
     NSFastLED::HSVHue color;
-    int t = g_temp;
-    if (t < 0)
-        t = 0;
-    if (t > 85)
-        t = 85;
         
-    int c = 255 - map(g_temp, 0, 85, 0, 255);
+    g_programColor = 230 - map(constrain(g_temp, 10, 85), 10, 85, 5, 230);
 
-    color = static_cast<NSFastLED::HSVHue>(c);
+    color = static_cast<NSFastLED::HSVHue>(g_programColor);
 
     Log.info("New program value is %d", color);
     candle.init(color, color - 5, color + 5, 25, 10);
@@ -198,8 +195,9 @@ void mqttCheckin(int mpm, bool checkin)
             
             writer.endObject();
             writer.buffer()[std::min(writer.bufferSize(), writer.dataSize())] = 0;
-            client.publish("tikilights/state", writer.buffer());
+            client.publish("tiki/state", writer.buffer());
         }
+        delay(100);
     }
 }
 
@@ -220,6 +218,7 @@ void setup()
     Particle.variable("sunset", g_sunset);
     Particle.variable("disabled", g_disabled);
     Particle.variable("temp", g_temp);
+    Particle.variable("program", g_programColor);
     Particle.function("wakeoffset", setWakeOffset);
     Particle.function("shutdown", shutdownDevice);
 
