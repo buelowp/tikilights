@@ -81,11 +81,9 @@ void netConnect(int mpm)
     }
 
     Particle.connect();
-    if (System.updatesPending()) {
-        System.enableUpdates();
-        Particle.process();
-    }
-    Particle.publishVitals();
+    System.enableUpdates();
+    Particle.process();
+    Particle.publishVitals();   // This won't happen if we get an update!
     mqttCheckin(mpm, false);
 }
 
