@@ -9,7 +9,7 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			156
+#define APP_VERSION			157
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
@@ -81,6 +81,10 @@ void netConnect(int mpm)
     }
 
     Particle.connect();
+    if (System.updatesPending()) {
+        System.enableUpdates();
+        Particle.process();
+    }
     Particle.publishVitals();
     mqttCheckin(mpm, false);
 }
@@ -90,6 +94,7 @@ void netDisconnect()
     client.loop();
     delay(100);
     client.disconnect();
+    Particle.disconnect();
     WiFi.off();
 }
 
