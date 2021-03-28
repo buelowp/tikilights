@@ -9,7 +9,7 @@
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			155
+#define APP_VERSION			156
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
@@ -76,7 +76,7 @@ void netConnect(int mpm)
         client.connect(g_mqttName.c_str());
         if (client.isConnected()) {
             Log.info("MQTT Connected");
-            client.subscribe("weather/conditions");
+            client.subscribe("weather/#");
         }
     }
 
@@ -249,7 +249,8 @@ void loop()
         }
         EVERY_N_MILLIS(ONE_SECOND) {
             if (!client.isConnected()) {
-                if (client.connect(g_mqttName.c_str())) {
+                client.connect(g_mqttName.c_str());
+                if (client.isConnected()) {
                     Log.info("MQTT Connected");
                     client.subscribe("weather/conditions");
                 }
