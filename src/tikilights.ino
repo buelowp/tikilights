@@ -1,20 +1,17 @@
 #define FASTLED_INTERNAL
-#define CLK_DBL             0
-#define CLEANUP_R1_AVRASM   0
 #include <FastLED.h>
 #include <sunset.h>
-#define ARDUINOJSON_ENABLE_PROGMEM 0
-#include <ArduinoJson.h>
 #include <MQTT.h>
 #include "TikiCandle.h"
 #include "Torch.h"
 
-#define APP_VERSION			157
+#define APP_VERSION			184
 
 PRODUCT_ID(985);
 PRODUCT_VERSION(APP_VERSION);
 
-SerialLogHandler logHandler;
+//SYSTEM_MODE(SEMI_AUTOMATIC);
+//SYSTEM_THREAD(ENABLED);
 
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 
@@ -35,9 +32,14 @@ int g_httpResponse;
 int g_wakeOffset;
 int g_programColor;
 bool g_running;
+bool g_connected;
+bool g_invalidJSON;
+bool g_unblock;
+uint16_t g_messageId;
 String g_name = "tikilight-";
 String g_mqttName = g_name + System.deviceID().substring(0, 8);
 String g_checkin = "tiki/state/" + System.deviceID().substring(0, 8);
+String g_version = System.version() + "." + String(APP_VERSION);
 TikiCandle candle;
 byte mqttServer[] = {172, 24, 1, 13};
 MQTT client(mqttServer, 1883, mqttCallback);
@@ -45,64 +47,66 @@ char g_buffer[512];
 
 STARTUP(WiFi.selectAntenna(ANT_INTERNAL));
 
+SystemSleepConfiguration config;
+SerialLogHandler logHandler;
+Serial1LogHandler logHandler2(115200);
+ApplicationWatchdog *wd;
+
 int currentTimeZone()
 {
-    g_timeZone = DST_OFFSET;
+    int timezone = CST_OFFSET;
     if (Time.month() > 3 && Time.month() < 11) {
-        return DST_OFFSET;
+        timezone = DST_OFFSET;
     }
     if (Time.month() == 3) {
         if ((Time.day() == _usDSTStart[Time.year() - TIME_BASE_YEAR]) && Time.hour() >= 2)
-            return DST_OFFSET;
+            timezone = DST_OFFSET;
         if (Time.day() > _usDSTStart[Time.year() - TIME_BASE_YEAR])
-            return DST_OFFSET;
+            timezone = DST_OFFSET;
     }
     if (Time.month() == 11) {
         if ((Time.day() == _usDSTEnd[Time.year() - TIME_BASE_YEAR]) && Time.hour() <=2)
-            return DST_OFFSET;
+            timezone = DST_OFFSET;
         if (Time.day() < _usDSTEnd[Time.year() - TIME_BASE_YEAR])
-            return DST_OFFSET;
+            timezone = DST_OFFSET;
     }
-    g_timeZone = CST_OFFSET;
-    return CST_OFFSET;
+    Log.info("Returning %d as time zone offset", timezone);
+    return timezone;
 }
 
-void netConnect(int mpm)
+void netConnect()
 {
-    WiFi.on();
-    WiFi.connect();
-    waitUntil(WiFi.ready);
-    if (!client.isConnected()) {
+    while (!client.isConnected()) {
         client.connect(g_mqttName.c_str());
         if (client.isConnected()) {
-            Log.info("MQTT Connected");
-            client.subscribe("weather/#");
+            Log.info("%s: MQTT Connected with name %s", __FUNCTION__, g_mqttName.c_str());
+            client.subscribe("weather/conditions");
+            g_connected = true;
         }
+        Particle.process();
     }
 
-    Particle.connect();
     System.enableUpdates();
-    Particle.process();
-    Particle.publishVitals();   // This won't happen if we get an update!
-    mqttCheckin(mpm, false);
 }
 
 void netDisconnect()
 {
     client.loop();
-    delay(100);
     client.disconnect();
     Particle.disconnect();
-    WiFi.off();
+    Log.info("Disconnected");
 }
 
 void syncTime()
 {
+    Log.info("Syncing time...");
    	Particle.syncTime();
     waitUntil(Particle.syncTimeDone);
-    Time.zone(currentTimeZone());
+    g_timeZone = currentTimeZone();
+    Time.zone(g_timeZone);
     sun.setCurrentDate(Time.year(), Time.month(), Time.day());
-    sun.setTZOffset(currentTimeZone());
+    sun.setTZOffset(g_timeZone);
+    g_sunset = sun.calcSunset();
 }
 
 int shutdownDevice(String)
@@ -123,7 +127,6 @@ void setProgram()
 
     color = static_cast<NSFastLED::HSVHue>(g_programColor);
 
-    Log.info("New program value is %d", color);
     candle.init(color, color - 5, color + 5, 25, 10);
 }
 
@@ -147,51 +150,65 @@ void restartDevice()
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) 
 {
-    StaticJsonDocument<200> json;
-    auto err = deserializeJson(json, static_cast<unsigned char*>(payload), static_cast<size_t>(length));
-
-    if (err != DeserializationError::Ok) {
-        Log.error("Unable to deserialize JSON");
-        Log.info("%s", payload);
-        return;
-    }
+    memset(g_buffer, '\0', 512);
+    memcpy(g_buffer, payload, length);
+    double temp;
 
     if (strcmp(topic, "weather/conditions") == 0) {
-        g_temp = json["environment"]["farenheit"];
-        setProgram();
-        Log.info("New temperature is %d", g_temp);
-    }
-    if (strcmp(topic, "tiki/device/restart") == 0) {
-        restartDevice();
-    }
-    if (strcmp(topic, "tiki/device/disable") == 0) {
-        g_disabled = true;
+        JSONValue outerObj = JSONValue::parseCopy(g_buffer);
+        JSONObjectIterator iter(outerObj);
+        while(iter.next()) {
+            if (iter.name() == "environment") {
+                JSONObjectIterator env(iter.value());
+                while (env.next()) {
+                    if (env.name() == "farenheit") {
+                        temp = env.value().toDouble() + .5;
+                        g_temp = static_cast<int>(temp);
+                        setProgram();
+                        Log.info("New temperature is %d, RAM: %ld, Time: %s", g_temp, System.freeMemory(), Time.timeStr().c_str());
+                        g_invalidJSON = false;
+                    }
+                }
+            }
+        }
     }
 }
 
-void mqttCheckin(int mpm, bool checkin)
+// QOS ack callback.
+// if application use QOS1 or QOS2, MQTT server sendback ack message id.
+void qoscallback(unsigned int messageid) 
+{
+    if (messageid == g_messageId) {
+        Log.info("Got a matched message ID %d", g_messageId);
+        g_unblock = true;
+        return;
+    }
+    Log.info("Message ID mismatch: expected %d, got %d", g_messageId, messageid);
+}
+
+void mqttCheckin(int mpm, int sleep, int checkin)
 {
     JSONBufferWriter writer(g_buffer, sizeof(g_buffer) - 1);
     if (!client.isConnected()) {
-        client.connect(g_mqttName.c_str());
-        Log.printf("Client is connected now: %d\n", client.isConnected());
+        netConnect();
     }
     if (client.isConnected()) {
+        g_connected = true;
         writer.beginObject();
-        writer.name("appid").value(g_appId);
-        if (checkin) {
-            writer.name("lights").value("on");
-        }
-        writer.name("time");
+        writer.name("application");
         writer.beginObject();
             writer.name("mpm").value(mpm);
-            writer.name("sunset").value(sun.calcSunset());
+            writer.name("sunset").value(g_sunset);
+            writer.name("program").value(g_programColor);
+            writer.name("wakeup").value(sleep);
+            if (checkin) {
+                writer.name("lights").value("on");
+            }
         writer.endObject();
         writer.name("photon");
         writer.beginObject();
-            writer.name("uptime").value(System.uptime());
             writer.name("deviceid").value(System.deviceID());
-            writer.name("version").value(System.version());
+            writer.name("version").value(g_version);
         writer.endObject();
         writer.name("network");
         writer.beginObject();
@@ -201,22 +218,38 @@ void mqttCheckin(int mpm, bool checkin)
             
         writer.endObject();
         writer.buffer()[std::min(writer.bufferSize(), writer.dataSize())] = 0;
-        Log.printf("Publishing vitals: %s\n", writer.buffer());
-        client.publish(g_checkin, writer.buffer(), MQTT::EMQTT_QOS::QOS1, true);
-        client.loop();
+        Log.info("Publishing vitals: %s", writer.buffer());
+        bool result = client.publish(g_checkin, writer.buffer(), MQTT::EMQTT_QOS::QOS1, &g_messageId);
+        Log.info("Publish of message ID %d was %d", g_messageId, result);
     }
+}
+
+void watchdogHandler() 
+{
+  // Do as little as possible in this function, preferably just
+  // calling System.reset().
+  // Do not attempt to Particle.publish(), use Cellular.command()
+  // or similar functions. You can save data to a retained variable
+  // here safetly so you know the watchdog triggered when you 
+  // restart.
+  // In 2.0.0 and later, RESET_NO_WAIT prevents notifying the cloud of a pending reset
+  System.reset(RESET_NO_WAIT);
 }
 
 void setup()
 {
     g_appId = APP_VERSION;
     g_timeZone = CST_OFFSET;
-    g_temp = 0;
+    g_temp = 70;
     g_wakeOffset = 30;
     g_disabled = false;
     g_running = false;
+    g_connected = false;
+    g_invalidJSON = false;
+    g_unblock = false;
 
-	Serial.begin(115200);
+    client.addQosCallback(qoscallback);
+
 	delay(2000); // sanity delay
 	FastLED.addLeds<NEOPIXEL, LED_PIN>(leds, NUM_LEDS);
 
@@ -227,69 +260,109 @@ void setup()
     Particle.variable("program", g_programColor);
     Particle.function("wakeoffset", setWakeOffset);
     Particle.function("shutdown", shutdownDevice);
+    Particle.variable("connected", g_connected);
+    Particle.variable("invalid", g_invalidJSON);
 
-	sun.setPosition(LATITUDE, LONGITUDE, CST_OFFSET);
-	syncTime();
-    
-    int mpm = Time.minute() + (Time.hour() * 60);
-    mqttCheckin(mpm, false);
-    g_sunset = sun.calcSunset();
+    wd = new ApplicationWatchdog(60000, watchdogHandler, 1536);
+
     FastLED.clear();
     FastLED.show();
+
+    waitFor(Particle.connected, 120000);
+
+    setProgram();
+    g_timeZone = currentTimeZone();
+    Time.zone(g_timeZone);
+    sun.setPosition(LATITUDE, LONGITUDE, -5);
+    sun.setCurrentDate(Time.year(), Time.month(), Time.day());
+    sun.setTZOffset(g_timeZone);
+    g_sunset = sun.calcSunset();
+    netConnect();
+    wd->checkin();
     Log.info("Done with setup, app version %d", g_appId);
-    netDisconnect();
 }
 
 void loop()
 {
+    static int lastHour = 24;
+    static int lastSecond = 60;
+    static bool wasSleeping = false;
+
+    if (wasSleeping) {
+        Particle.connect();
+        waitFor(Particle.connected, 120000);
+        if (!Particle.connected()) {
+            config.mode(SystemSleepMode::ULTRA_LOW_POWER).duration(1min);
+            Log.info("Unable to connect to cloud, sleeping for 1min");
+            System.sleep(config);
+        }
+        wd->checkin();
+
+        Log.info("Particle cloud connected");
+        netConnect();
+        if (!client.isConnected()) {
+            config.mode(SystemSleepMode::ULTRA_LOW_POWER).duration(1min);
+            System.sleep(config);        
+        }
+
+        Log.info("MQTT client connected");
+        wd->checkin();
+        sun.setPosition(LATITUDE, LONGITUDE, CST_OFFSET);
+        g_sunset = sun.calcSunset();
+    }
+    wasSleeping = false;
+
     int mpm = Time.minute() + (Time.hour() * 60);
+    wd->checkin();
 
     if (mpm >= g_sunset) {
-        Log.info("We are past sunset: %d", mpm);
-        g_running = true;
-        if (!WiFi.ready()) {
-            netConnect(mpm);
+        candle.run(30);
+        if (lastHour != Time.hour()) {
+            Log.info("mpm = %d, sunset %f, time = %s, RAM: %ld", mpm, g_sunset, Time.timeStr().c_str(), System.freeMemory());
+            syncTime();
+            mqttCheckin(mpm, 0, true);
+            lastHour = Time.hour();
         }
-        EVERY_N_MILLIS(ONE_SECOND) {
-            if (!client.isConnected()) {
-                client.connect(g_mqttName.c_str());
-                if (client.isConnected()) {
-                    Log.info("MQTT Connected");
-                    client.subscribe("weather/conditions");
-                }
-                else {
-                    Log.info("Could not connect to MQTT server");
-                }
-            }
-            else {
+        if (lastSecond != Time.second()) {
+            if (client.isConnected()) {
                 client.loop();
             }
+            else {
+                netConnect();
+            }
+            lastSecond = Time.second();
+            wd->checkin();
         }
     }
+    else if (Time.hour() == 0 && Time.minute() == 0 && Time.second() == 0) {
+        Log.info("Restarting after running program: %s", Time.timeStr().c_str());
+        System.reset(RESET_NO_WAIT);
+    }   
     else {
-        if (g_running) {
-            g_running = false;
-            Log.info("We are not past sunset: %d (%d)", mpm, g_running);
-            netDisconnect();
-        }
-    }
-    
-    EVERY_N_MILLIS(ONE_HOUR) {
-        Log.info("Attempting to checkin in: %d", g_running);
-        if (!g_running) {
-            netConnect(mpm);
-        }
         syncTime();
-        if (!g_running) {
-            netDisconnect();
-        }
-    }
+        mpm = Time.minute() + (Time.hour() * 60);
+        system_tick_t remaining = g_sunset - mpm;
+        if (remaining > 60)
+            remaining = 60;
 
-    if (!g_disabled && g_running) {
-        candle.run(25);        
-    }
-    else {
+        Log.info("MPM: %d, Remain: %ld, connected: %d, RAM: %ld", mpm, remaining, client.isConnected(), System.freeMemory());
+        remaining = remaining * ONE_MINUTE;     // Convert to millis
+        mqttCheckin(mpm, remaining, false);
+        while (!g_unblock) {
+            client.loop();
+            delay(10);
+        }
+        g_unblock = false;
         FastLED.clear();
         FastLED.show();
+        netDisconnect();
+        wd->checkin();
+        Log.info("sleeping for %ld millis at %s, RAM: %ld", remaining, Time.timeStr().c_str(), System.freeMemory());
+        for (system_tick_t i = 0; i < remaining / 1000; i++) {
+            delay(1000);
+            wd->checkin();
+        }
+        Log.info("Ending sleep");
+        wasSleeping = true;   // Uncomment when going back to sleep
     }
 }
